@@ -1,0 +1,19 @@
+# 构建产物
+/build/
+/dist/
+*.so
+*.dylib
+
+# 私有运维记录（不随仓库分发）
+OPS-PRIVATE.md
+
+# 密钥与凭据（永远不入库）
+*.key
+*.pem
+sso*.txt
+
+# 编辑器/系统
+.DS_Store
+*.swp
+.idea/
+.vscode/

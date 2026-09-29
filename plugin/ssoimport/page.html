@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSO 导入 · CLIProxyAPI</title>
+<style>
+:root{color-scheme:light dark}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;line-height:1.5}
+h1{font-size:1.3rem}
+textarea{width:100%;box-sizing:border-box;height:9rem;font-family:ui-monospace,Menlo,monospace;font-size:.85rem;border:1px solid #8885;border-radius:8px;padding:.6rem;background:transparent;color:inherit}
+button{margin-top:.6rem;padding:.5rem 1.4rem;font-size:.95rem;border:none;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}
+table{width:100%;border-collapse:collapse;margin-top:1rem;font-size:.9rem}
+th,td{text-align:left;padding:.35rem .5rem;border-bottom:1px solid #8883}
+.ok{color:#16a34a}.fail{color:#dc2626}
+#keyrow{margin-top:.8rem;display:none}
+#keyrow input{width:100%;box-sizing:border-box;padding:.45rem .6rem;border:1px solid #8885;border-radius:8px;background:transparent;color:inherit;font-family:ui-monospace,Menlo,monospace}
+#note{margin-top:1rem;font-size:.8rem;color:#888}
+</style>
+</head>
+<body>
+<h1>SSO → xai 凭证导入</h1>
+<p>每行一个 sso cookie（<code>sso=...</code> 或裸 token），最多 10 个。转换含浏览器指纹流程，单个账号最坏需数分钟，请勿关闭页面。</p>
+<textarea id="tokens" placeholder="sso= eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...&#10;sso= ..."></textarea>
+<div id="keyrow">
+  <input id="mgmtkey" type="password" placeholder="管理密钥（未在本浏览器检测到，请手填一次）" autocomplete="off">
+</div>
+<button id="go">转换并导入</button>
+<div id="result"></div>
+<div id="note">凭证经 <code>host.auth.save</code> 写入 auths 目录，落盘即热加载，无需重启。同一账号凭证若还在别处使用，注意 xAI refresh_token 轮换会让其他持有方逐渐失效。</div>
+<script>
+'use strict';
+var SSO_IMPORT = {
+  salt: 'cli-proxy-api-webui::secure-storage',
+  encPrefix: 'enc::v1::',
+  authKey: 'cli-proxy-auth',
+  legacyKey: 'managementKey',
+  sessionKey: 'sso-import-mgmt-key',
+  apiConvert: '/v0/management/plugins/sso-import/convert',
+  apiStatus: '/v0/management/plugins/sso-import/status'
+};
+
+function xorDecrypt(b64, keyText) {
+  var bin = atob(b64);
+  var keyBytes = new TextEncoder().encode(keyText);
+  var out = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i) ^ keyBytes[i % keyBytes.length];
+  return new TextDecoder().decode(out);
+}
+
+// 与管理中心（Cli-Proxy-API-Management-Center 系）同源部署时，直接解出
+// 已保存的管理密钥。CPAMP 用 v2 混淆（key=salt|v2|host，不含 UA），官方
+// CPAMC 用 v1（key=salt|host|ua），两者都兼容；失败返回 null 由调用方降级
+// 为手填。
+function keyFromStorage() {
+  try {
+    var raw = localStorage.getItem(SSO_IMPORT.authKey);
+    if (raw) {
+      var text = raw;
+      if (raw.indexOf('enc::v2::') === 0) {
+        text = xorDecrypt(raw.slice(9), SSO_IMPORT.salt + '|v2|' + location.host);
+      } else if (raw.indexOf(SSO_IMPORT.encPrefix) === 0) {
+        text = xorDecrypt(raw.slice(9), SSO_IMPORT.salt + '|' + location.host + '|' + navigator.userAgent);
+      }
+      var parsed = JSON.parse(text);
+      var mk = parsed && parsed.state && parsed.state.managementKey;
+      if (mk) return mk;
+    }
+    var legacy = localStorage.getItem(SSO_IMPORT.legacyKey);
+    if (legacy) return legacy;
+  } catch (e) { /* 同源读不到就手填 */ }
+  return null;
+}
+
+function sessionKeyGet() {
+  try { return sessionStorage.getItem(SSO_IMPORT.sessionKey); } catch (e) { return null; }
+}
+function sessionKeySet(v) {
+  try { if (v) sessionStorage.setItem(SSO_IMPORT.sessionKey, v); } catch (e) {}
+}
+
+function resolveKey() {
+  return sessionKeyGet() || keyFromStorage() || null;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function render(resp) {
+  var html = '';
+  if (resp.ok && resp.ok.length) {
+    html += '<table><tr><th>邮箱</th><th>tier</th><th>过期时间(UTC)</th><th>文件</th></tr>';
+    resp.ok.forEach(function (it) {
+      html += '<tr class="ok"><td>' + esc(it.email) + '</td><td>' + esc(it.tier) + '</td><td>' + esc(it.expired) + '</td><td>' + esc(it.file) + '</td></tr>';
+    });
+    html += '</table>';
+  }
+  if (resp.failed && resp.failed.length) {
+    html += '<p class="fail">失败：</p><table>';
+    resp.failed.forEach(function (it) {
+      html += '<tr class="fail"><td>' + esc(it.email || '-') + '</td><td>' + esc(it.error) + '</td></tr>';
+    });
+    html += '</table>';
+  }
+  if (!html) html = '<p>无结果</p>';
+  document.getElementById('result').innerHTML = html;
+}
+
+document.getElementById('go').addEventListener('click', function () {
+  var btn = this;
+  var tokens = document.getElementById('tokens').value.split(/\n+/).map(function (s) { return s.trim(); }).filter(Boolean);
+  var result = document.getElementById('result');
+  if (!tokens.length) { result.innerHTML = '<p class="fail">请先粘贴 sso</p>'; return; }
+  var key = resolveKey();
+  var keyInput = document.getElementById('keyrow');
+  var keyField = document.getElementById('mgmtkey');
+  if (!key) {
+    key = keyField.value.trim();
+    if (!key) { keyInput.style.display = 'block'; keyField.focus(); result.innerHTML = '<p class="fail">需要管理密钥（与面板登录密钥相同）</p>'; return; }
+    sessionKeySet(key);
+  }
+  var auth = { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' };
+  function handleOut(out) {
+    if (out.status === 401) {
+      try { sessionStorage.removeItem(SSO_IMPORT.sessionKey); } catch (e) {}
+      document.getElementById('keyrow').style.display = 'block';
+      document.getElementById('mgmtkey').focus();
+      result.innerHTML = '<p class="fail">管理密钥无效，请重新填写</p>';
+      btn.disabled = false;
+      return true;
+    }
+    if (out.status >= 400 || out.body.error) {
+      result.innerHTML = '<p class="fail">' + esc(out.body.error || ('HTTP ' + out.status)) + '</p>';
+      btn.disabled = false;
+      return true;
+    }
+    return false;
+  }
+  function poll(job) {
+    fetch(SSO_IMPORT.apiStatus + '?job=' + encodeURIComponent(job), { headers: auth })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (out) {
+        if (handleOut(out)) return;
+        var body = out.body || {};
+        if (body.state === 'running') { setTimeout(function () { poll(job); }, 3000); return; }
+        if (body.state === 'done') { render(body.result || {}); btn.disabled = false; return; }
+        result.innerHTML = '<p class="fail">任务状态异常</p>';
+        btn.disabled = false;
+      })
+      .catch(function (e) {
+        result.innerHTML = '<p class="fail">查询失败：' + esc(e) + '，继续重试中…</p>';
+        setTimeout(function () { poll(job); }, 5000);
+      });
+  }
+  btn.disabled = true;
+  result.innerHTML = '<p>已提交，转换中…单个账号最坏数分钟。</p>';
+  fetch(SSO_IMPORT.apiConvert, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ tokens: tokens })
+  }).then(function (r) {
+    return r.json().catch(function () { return { error: 'HTTP ' + r.status }; }).then(function (j) { return { status: r.status, body: j }; });
+  }).then(function (out) {
+    if (handleOut(out)) return;
+    if (out.body.job) { poll(out.body.job); return; }
+    result.innerHTML = '<p class="fail">响应缺少任务号</p>';
+    btn.disabled = false;
+  }).catch(function (e) {
+    result.innerHTML = '<p class="fail">提交失败：' + esc(e) + '</p>';
+    btn.disabled = false;
+  });
+});
+</script>
+</body>
+</html>

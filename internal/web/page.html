@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSO → CPA 导入</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px;
+         margin: 32px auto; padding: 0 16px; line-height: 1.6; }
+  h1 { font-size: 1.3rem; }
+  textarea { width: 100%; box-sizing: border-box; font: inherit;
+         border: 1px solid #888; border-radius: 6px; padding: 8px; margin: 4px 0 12px; }
+  textarea { height: 160px; font-family: ui-monospace, monospace; font-size: 12px; }
+  button { font: inherit; padding: 8px 20px; border-radius: 6px; border: 0;
+           background: #0d6efd; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: wait; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 14px; }
+  td, th { border: 1px solid #999; padding: 4px 8px; text-align: left; }
+  .ok { color: #0a7d32; } .fail { color: #c0262c; }
+  .muted { color: #777; font-size: 13px; }
+  pre.fail { background: rgba(192,38,44,.08); padding: 8px; border-radius: 6px;
+             white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Grok SSO → CPA 账号导入</h1>
+<p class="muted">每行一个 sso cookie（也支持整行 Cookie 头，工具自动提取）。
+转换后自动生成 <code>xai-&lt;email&gt;.json</code> 写入 CPA auths 目录并热加载，
+无需重启。单次最多 10 个（更多请分批），每个最坏约 4-5 分钟，请耐心等待。</p>
+<p class="muted">同一账号凭证若还在别处使用：xAI 的 refresh_token 会轮换
+（旧 token 有宽限期），任一边出现 invalid_grant 请及时下线一边。</p>
+
+<label>sso tokens
+<textarea id="tokens" placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9....（每行一个）"></textarea></label>
+<button id="go">转换并导入</button>
+<div id="out"></div>
+
+<script>
+// 密钥由服务端注入（__IMPORT_KEY_PLACEHOLDER__），页面无需输入。
+const PAGE_KEY = "__IMPORT_KEY_PLACEHOLDER__";
+const $ = id => document.getElementById(id);
+$('go').onclick = async () => {
+  const tokens = $('tokens').value;
+  if (!PAGE_KEY) { $('out').textContent = '服务端密钥未配置（检查 .key 文件）'; return; }
+  if (!tokens.trim()) { $('out').textContent = '请粘贴 sso token'; return; }
+  $('go').disabled = true; $('out').textContent = '转换中…（指纹流程较慢，勿关闭页面）';
+  try {
+    const r = await fetch('api/convert', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tokens, key: PAGE_KEY})
+    });
+    const d = await r.json();
+    if (r.status === 401) { $('out').textContent = '密钥不正确（服务端 .key 已轮换？重启页面重试）'; return; }
+    if (!r.ok) { $('out').textContent = '错误: ' + (d.error || r.status); return; }
+    let h = `<p>输入 ${d.input} 个，成功 <b class="ok">${d.ok.length}</b>，失败 <b class="fail">${d.failed.length}</b></p>`;
+    if (d.ok.length) {
+      h += '<table><tr><th>email</th><th>tier</th><th>token 过期</th><th>文件</th></tr>';
+      for (const it of d.ok) h += `<tr><td>${esc(it.email)}</td><td>${esc(it.tier)}</td><td>${esc(it.expired)}</td><td class="muted">${esc(it.file)}</td></tr>`;
+      h += '</table><p class="muted">已写入 auths 目录，CPA 会自动加载（约 1 分钟内生效）。</p>';
+    }
+    if (d.failed.length) {
+      h += '<p class="fail">失败明细：</p><pre class="fail">' + d.failed.map(f => esc(f.email ? (f.email + ': ' + f.error) : f.error)).join('\n') + '</pre>';
+    }
+    $('out').innerHTML = h;
+  } catch (e) { $('out').textContent = '请求失败: ' + e; }
+  finally { $('go').disabled = false; }
+};
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+</script>
+</body>
+</html>

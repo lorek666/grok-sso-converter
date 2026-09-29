@@ -1,0 +1,29 @@
+s2sso
+=====
+
+版权许可
+--------
+本仓库整体以 GNU LGPL-3.0-or-later 发布（见 LICENSE；LGPL-3.0 引用的
+GPL-3.0 条款全文见 COPYING）。
+
+其中部分文件派生自 Wei-Shaw/sub2api（LGPL-3.0），文件头已逐一带
+SPDX 标识与来源说明：
+
+- internal/xai/sso_device.go（逐字拷贝）
+- internal/xai/subscription_tier.go（裁剪）
+- internal/fpclient/client.go（逐字拷贝，调整包路径）
+- internal/convert/convert.go（派生：重试与凭据组装语义）
+
+第三方依赖（以 go.mod 为准）
+--------------------------
+- github.com/bogdanfinn/tls-client — BSD-4-Clause
+- github.com/bogdanfinn/utls — BSD-3-Clause
+- github.com/router-for-me/CLIProxyAPI/v8（仅 sdk/pluginabi 与 sdk/pluginapi）— MIT
+- github.com/stretchr/testify — MIT
+- gopkg.in/yaml.v3 — Apache-2.0
+
+商标与用途声明
+--------------
+本项目与 xAI、xAI Corp、Grok 无关联亦未获其认可；"Grok"/"xAI" 名称
+仅用于描述互操作目标。使用本项目产生的账号行为受 xAI 服务条款约束，
+使用者自行承担合规责任。

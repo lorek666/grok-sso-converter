@@ -1,0 +1,19 @@
+[Unit]
+Description=s2sso serve (SSO -> CPA import web)
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+# 按部署位置调整三个路径：二进制、密钥文件（600）、CPA auths 目录
+ExecStartPre=/usr/bin/test -f /etc/s2sso/import.key
+ExecStart=/usr/local/bin/s2sso serve -key-file /etc/s2sso/import.key -auths-dir /path/to/cpa/auths
+Restart=always
+RestartSec=3
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

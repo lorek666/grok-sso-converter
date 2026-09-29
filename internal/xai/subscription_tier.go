@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// 本文件裁剪自 Wei-Shaw/sub2api（LGPL-3.0）的同名文件（仅保留 tier 解析）。
+// Copyright (C) Wei-Shaw/sub2api contributors.
+
+package xai
+
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+)
+
+// 本文件是 sub2api fork xai/subscription_tier.go 的裁剪版：只保留 JWT tier
+// 声明的解析与归一化（CanonicalGrokPlan / QuotaSnapshot 等服务端信号不在
+// 本工具的职责范围内）。
+
+// MapJWTSubscriptionTier maps prod_auth.SubscriptionTier numeric JWT claims
+// to stable snake_case keys used by Grok Build / Mixpanel.
+func MapJWTSubscriptionTier(tier uint64) string {
+	switch tier {
+	case 0:
+		return "free"
+	case 1:
+		return "supergrok"
+	case 2:
+		return "x_basic"
+	case 3:
+		return "x_premium"
+	case 4:
+		return "x_premium_plus"
+	case 5:
+		return "supergrok_heavy"
+	case 6:
+		return "supergrok_lite"
+	case 7:
+		return "supergrok_plus"
+	default:
+		return strconv.FormatUint(tier, 10)
+	}
+}
+
+// NormalizeSubscriptionTier canonicalizes display names, /user strings, and
+// JWT-derived keys onto the same snake_case identifiers.
+func NormalizeSubscriptionTier(raw string) string {
+	t := strings.ToLower(strings.TrimSpace(raw))
+	t = strings.ReplaceAll(t, "-", "_")
+	t = strings.Join(strings.Fields(t), "_")
+	switch t {
+	case "free", "grok_free", "grokfree", "free_tier", "freetier", "grok_basic", "grokbasic":
+		return "free"
+	case "supergrok", "grokpro":
+		return "supergrok"
+	case "supergrok_lite", "supergroklite":
+		return "supergrok_lite"
+	case "supergrok_heavy", "supergrokheavy":
+		return "supergrok_heavy"
+	case "supergrok_pro", "supergrokpro":
+		return "supergrok_pro"
+	case "supergrok_plus", "supergrokplus":
+		return "supergrok_plus"
+	case "x_basic", "xbasic", "basic":
+		return "x_basic"
+	case "x_premium", "xpremium":
+		return "x_premium"
+	case "x_premium_plus", "xpremiumplus", "x_premium+":
+		return "x_premium_plus"
+	default:
+		return t
+	}
+}
+
+// SubscriptionTierFromJWT decodes an access token payload (no signature check)
+// and maps the numeric or string `tier` claim.
+func SubscriptionTierFromJWT(jwt string) string {
+	claims := DecodeJWTClaims(jwt)
+	if claims == nil {
+		return ""
+	}
+	raw, ok := claims["tier"]
+	if !ok || raw == nil {
+		return ""
+	}
+	switch v := raw.(type) {
+	case float64:
+		if v < 0 {
+			return ""
+		}
+		return MapJWTSubscriptionTier(uint64(v))
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil || n < 0 {
+			return NormalizeSubscriptionTier(v.String())
+		}
+		return MapJWTSubscriptionTier(uint64(n))
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return ""
+		}
+		if n, err := strconv.ParseUint(trimmed, 10, 64); err == nil {
+			return MapJWTSubscriptionTier(n)
+		}
+		return NormalizeSubscriptionTier(trimmed)
+	default:
+		return ""
+	}
+}
